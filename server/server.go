@@ -15,8 +15,6 @@ import (
 	"time"
 )
 
-const INITIAL_REG_TIMEOUT = 30 //timeout of initial register , in seconds
-
 type AuthIP struct {
 	addr          string
 	creation_time time.Time
@@ -37,14 +35,16 @@ type AuthList struct {
 	add_chan   chan string
 	del_chan   chan string
 	query_chan chan AuthIPQuery
+	timeout    int
 }
 
-func NewAuthList() *AuthList {
+func NewAuthList(lifetime int) *AuthList {
 	n := new(AuthList)
 	n.list = make(map[string]*AuthIP)
 	n.add_chan = make(chan string)
 	n.del_chan = make(chan string)
 	n.query_chan = make(chan AuthIPQuery)
+	n.timeout = lifetime
 	go n.housekeeping()
 	return n
 }
@@ -72,7 +72,7 @@ func (alist *AuthList) housekeeping() {
 			for adr, val := range alist.list {
 				cur_time := time.Now()
 				if val.started == false {
-					if cur_time.Sub(val.creation_time)/time.Second > INITIAL_REG_TIMEOUT {
+					if cur_time.Sub(val.creation_time)/time.Second > time.Duration(alist.timeout)*time.Second {
 						delete(alist.list, adr)
 						common.InfoLog.Printf("authed client %v timeout, removed", adr)
 					}
@@ -92,9 +92,10 @@ type TCPProxyServer struct {
 	target_ip    string
 	target_port  int
 	auth_ip_list *AuthList
+	lifetime     int
 }
 
-func NewTCPProxyServer(data_port int, ctl_port int, target_ip string, target_port int, conf_dir string) (*TCPProxyServer, error) {
+func NewTCPProxyServer(data_port int, ctl_port int, target_ip string, target_port int, conf_dir string, lifetime int) (*TCPProxyServer, error) {
 	cert_path := filepath.Join(conf_dir, "svr_cert")
 	key_path := filepath.Join(conf_dir, "svr_key")
 	cer, err := tls.LoadX509KeyPair(cert_path, key_path)
@@ -124,7 +125,8 @@ func NewTCPProxyServer(data_port int, ctl_port int, target_ip string, target_por
 	}
 	new_svr.target_ip = target_ip
 	new_svr.target_port = target_port
-	new_svr.auth_ip_list = NewAuthList()
+	new_svr.auth_ip_list = NewAuthList(lifetime)
+	new_svr.lifetime = lifetime
 	return new_svr, nil
 }
 
@@ -207,15 +209,21 @@ func (svr *TCPProxyServer) handleDataConnection(conn net.Conn) {
 		return
 	}
 	common.InfoLog.Printf("start passing data beteen %v and target %v", conn.RemoteAddr(), svr_conn.RemoteAddr())
+	var wg sync.WaitGroup
+	wg.Add(1)
 	go func() {
 		io.Copy(svr_conn, conn)
 		defer conn.Close()
 		defer svr_conn.Close()
+		wg.Done()
 	}()
 	go func() {
 		io.Copy(conn, svr_conn)
 		defer conn.Close()
 		defer svr_conn.Close()
+		wg.Done()
 	}()
-
+	wg.Wait()
+	t := time.NewTimer(time.Duration(svr.lifetime) * time.Second)
+	<-t.C
 }

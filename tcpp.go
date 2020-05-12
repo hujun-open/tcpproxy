@@ -10,7 +10,7 @@ import (
 )
 
 func main() {
-	var ver = 1.0
+	var ver = 1.1
 	version_str := fmt.Sprintf("tcp proxy, version %v", ver)
 	fmt.Println(version_str)
 	role := flag.String("role", "clnt", "specify the role, svr/clnt")
@@ -19,6 +19,7 @@ func main() {
 	svr_port := flag.Uint("svr_port", 0, "specify the target server port")
 	svr_ip := flag.String("svr_ip", "", "specify the target server ip")
 	san_check := flag.Bool("san_chk", false, "server certificate SAN check")
+	lifetime := flag.Uint("holdon", 300, "holdon time in seconds after data connection is closed")
 	flag.Parse()
 	if *svr_ip == "" || int(*svr_port) == 0 {
 		common.ErrLog.Println("target server ip or port is not specified")
@@ -28,7 +29,7 @@ func main() {
 	conf_dir := common.GetConfDir()
 	switch *role {
 	case "svr":
-		svr, err := server.NewTCPProxyServer(int(*data_port), int(*ctl_port), *svr_ip, int(*svr_port), conf_dir)
+		svr, err := server.NewTCPProxyServer(int(*data_port), int(*ctl_port), *svr_ip, int(*svr_port), conf_dir, int(*lifetime))
 		if err != nil {
 			common.ErrLog.Panicln(err)
 			return

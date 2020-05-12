@@ -17,7 +17,7 @@ Any packets received on data_port will be forwarded to target ip and port
 
 tcpproxy use TLS to authenticate client, so its uses TLS client certificate authentication mechanism; 
 
-note: tcpproxy by default use a hard coded "1.1.1.1" in SAN of server certificate, this is to avoid hassle to create a different certificate for tcpproxy server; since main point here is for sever to authenticate client, I think it is acceptable; if you don't like it, use `-san_chk` for the client to check server certificate's SAN;
+note: tcpproxy by default use a hard coded "1.1.1.1" in SAN of server certificate, this is to avoid hassle to create a different certificate for each tcpproxy server; since main point here is for sever to authenticate client, I think it is acceptable; if you don't like it, and do want to use a certificate with correct SAN, use `-san_chk` for the client to check server certificate's SAN;
 
 ## build
 tcpproxy is coded with golang ver1.9, just use "go build" in the source directory to build the binary;
