@@ -19,8 +19,7 @@ tcpproxy use TLS to authenticate client, so its uses TLS client certificate auth
 
 note: tcpproxy by default use a hard coded "1.1.1.1" in SAN of server certificate, this is to avoid hassle to create a different certificate for each tcpproxy server; since main point here is for sever to authenticate client, I think it is acceptable; if you don't like it, and do want to use a certificate with correct SAN, use `-san_chk` for the client to check server certificate's SAN;
 
-## build
-tcpproxy is coded with golang ver1.9, just use "go build" in the source directory to build the binary;
+tcpproxy authenticate connection based on the source IP only, port not included
 
 
 ## install
@@ -69,13 +68,15 @@ note: it is need to be done within 30 seconds after authentication, otherwise yo
 
 ## CLI Parameter
 ```
-tcp proxy, version 1
+tcp proxy, version 1.2
 flag provided but not defined: -?
 Usage of tcpproxy:
   -ctl_port uint
         specify the port for data packet from client (default 8893)
   -data_port uint
         specify the port for receiving control msg (default 8892)
+  -holdon uint
+        holdon time in seconds after all data connections from a src IP are closed (default 300)
   -role string
         specify the role, svr/clnt (default "clnt")
   -san_chk

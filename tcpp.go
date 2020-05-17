@@ -10,7 +10,7 @@ import (
 )
 
 func main() {
-	var ver = 1.1
+	var ver = 1.2
 	version_str := fmt.Sprintf("tcp proxy, version %v", ver)
 	fmt.Println(version_str)
 	role := flag.String("role", "clnt", "specify the role, svr/clnt")
@@ -19,7 +19,7 @@ func main() {
 	svr_port := flag.Uint("svr_port", 0, "specify the target server port")
 	svr_ip := flag.String("svr_ip", "", "specify the target server ip")
 	san_check := flag.Bool("san_chk", false, "server certificate SAN check")
-	lifetime := flag.Uint("holdon", 300, "holdon time in seconds after data connection is closed")
+	lifetime := flag.Uint("holdon", 300, "holdon time in seconds after all data connections from a src IP are closed")
 	flag.Parse()
 	if *svr_ip == "" || int(*svr_port) == 0 {
 		common.ErrLog.Println("target server ip or port is not specified")

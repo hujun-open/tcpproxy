@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"tcpproxy/common"
 	"time"
 )
@@ -18,7 +19,35 @@ import (
 type AuthIP struct {
 	addr          string
 	creation_time time.Time
-	started       bool
+	connCount     *uint32
+	del_chan      chan string
+	timeout       time.Duration
+}
+
+func NewAuthIP(addrstr string, delchan chan string, holdon time.Duration) *AuthIP {
+	r := new(AuthIP)
+	r.addr = addrstr
+	r.creation_time = time.Now()
+	r.connCount = new(uint32)
+	r.del_chan = delchan
+	r.timeout = holdon
+	atomic.StoreUint32(r.connCount, 0)
+	go r.closeMe()
+	return r
+}
+
+func (self *AuthIP) closeMe() {
+	timer1 := time.NewTimer(self.timeout)
+	defer timer1.Stop()
+	for {
+		<-timer1.C
+		if atomic.LoadUint32(self.connCount) == 0 {
+			self.del_chan <- self.addr
+			return
+		}
+		timer1.Reset(self.timeout)
+	}
+
 }
 
 //func (aip AuthIP) SetStart(b bool) {
@@ -31,23 +60,30 @@ type AuthIPQuery struct {
 }
 
 type AuthList struct {
-	list       map[string]*AuthIP
-	add_chan   chan string
-	del_chan   chan string
-	query_chan chan AuthIPQuery
-	timeout    int
+	list           map[string]*AuthIP
+	add_chan       chan string
+	del_chan       chan string
+	query_chan     chan AuthIPQuery
+	connclose_chan chan string
+	list_lock      *sync.RWMutex
+	timeout        time.Duration
 }
+
+const AUTHLIST_CHANDEPTH = 8
 
 func NewAuthList(lifetime int) *AuthList {
 	n := new(AuthList)
 	n.list = make(map[string]*AuthIP)
-	n.add_chan = make(chan string)
-	n.del_chan = make(chan string)
-	n.query_chan = make(chan AuthIPQuery)
-	n.timeout = lifetime
+	n.add_chan = make(chan string, AUTHLIST_CHANDEPTH)
+	n.del_chan = make(chan string, AUTHLIST_CHANDEPTH)
+	n.connclose_chan = make(chan string, AUTHLIST_CHANDEPTH)
+	n.query_chan = make(chan AuthIPQuery, AUTHLIST_CHANDEPTH)
+	n.list_lock = new(sync.RWMutex)
+	n.timeout = time.Duration(lifetime) * time.Second
 	go n.housekeeping()
 	return n
 }
+
 func (alist *AuthList) housekeeping() {
 	var tgt_addr string
 	var query AuthIPQuery
@@ -55,31 +91,32 @@ func (alist *AuthList) housekeeping() {
 	for {
 		select {
 		case tgt_addr = <-alist.add_chan:
-			alist.list[tgt_addr] = &AuthIP{addr: tgt_addr, creation_time: time.Now(), started: false}
+			alist.list_lock.Lock()
+			alist.list[tgt_addr] = NewAuthIP(tgt_addr, alist.del_chan, alist.timeout)
+			alist.list_lock.Unlock()
 			common.InfoLog.Printf("client %v authed", tgt_addr)
 		case tgt_addr = <-alist.del_chan:
+			alist.list_lock.Lock()
 			delete(alist.list, tgt_addr)
+			alist.list_lock.Unlock()
 			common.InfoLog.Printf("client %v removed", tgt_addr)
 		case query = <-alist.query_chan:
+			alist.list_lock.RLock()
 			_, r := alist.list[query.addr]
+			alist.list_lock.RUnlock()
 			if r == true {
-				alist.list[query.addr].started = true
+				atomic.AddUint32(alist.list[query.addr].connCount, 1)
+				common.InfoLog.Printf("client %v has now %d connections", query.addr, atomic.LoadUint32(alist.list[query.addr].connCount))
 			}
 			query.result <- r
-
-		default:
-			//remove timeout entries
-			for adr, val := range alist.list {
-				cur_time := time.Now()
-				if val.started == false {
-					if cur_time.Sub(val.creation_time)/time.Second > time.Duration(alist.timeout)*time.Second {
-						delete(alist.list, adr)
-						common.InfoLog.Printf("authed client %v timeout, removed", adr)
-					}
-				}
+		case tgt_addr = <-alist.connclose_chan:
+			alist.list_lock.RLock()
+			_, r := alist.list[query.addr]
+			alist.list_lock.RUnlock()
+			if r == true {
+				atomic.AddUint32(alist.list[query.addr].connCount, ^uint32(0))
+				common.InfoLog.Printf("client %v has now %d connections", query.addr, atomic.LoadUint32(alist.list[tgt_addr].connCount))
 			}
-			time.Sleep(10 * time.Millisecond) // this is needed for linux32 ver 4.4.0-34; not needed on windows 7 64bit
-
 		}
 	}
 }
@@ -194,7 +231,7 @@ func (svr *TCPProxyServer) handleDataConnection(conn net.Conn) {
 		common.WarnLog.Println((common.MakeErrviaStr(fmt.Sprintf("unusual error: can't parse remoteaddr,%v", conn.RemoteAddr()))))
 		return
 	}
-	defer func(c chan string, i string) { c <- i }(svr.auth_ip_list.del_chan, remote_ip)
+	defer func(c chan string, i string) { c <- i }(svr.auth_ip_list.connclose_chan, remote_ip)
 	q := AuthIPQuery{addr: remote_ip, result: make(chan bool)}
 	svr.auth_ip_list.query_chan <- q
 	r := <-q.result
@@ -210,7 +247,7 @@ func (svr *TCPProxyServer) handleDataConnection(conn net.Conn) {
 	}
 	common.InfoLog.Printf("start passing data beteen %v and target %v", conn.RemoteAddr(), svr_conn.RemoteAddr())
 	var wg sync.WaitGroup
-	wg.Add(1)
+	wg.Add(2)
 	go func() {
 		io.Copy(svr_conn, conn)
 		defer conn.Close()
@@ -224,6 +261,4 @@ func (svr *TCPProxyServer) handleDataConnection(conn net.Conn) {
 		wg.Done()
 	}()
 	wg.Wait()
-	t := time.NewTimer(time.Duration(svr.lifetime) * time.Second)
-	<-t.C
 }
